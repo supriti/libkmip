@@ -129,6 +129,28 @@ kmip_linked_list_enqueue(LinkedList *list, LinkedListItem *item)
 }
 
 /*
+ * Test helper: Hex dump for debugging TTLV encoding
+ *
+ * Usage:
+ *   kmip_print_TTLV(ctx->buffer, ctx->index);
+ */
+void
+kmip_print_TTLV(const uint8 *buffer, int length)
+{
+    printf("TTLV Hex Dump (%d bytes):\n", length);
+    for(int i = 0; i < length; i++)
+    {
+        printf("%02X ", buffer[i]);
+        if((i + 1) % 16 == 0)
+            printf("\n");
+        else if((i + 1) % 8 == 0)
+            printf(" ");
+    }
+    if(length % 16 != 0)
+        printf("\n");
+}
+
+/*
 Memory Handlers
 */
 
@@ -870,7 +892,18 @@ kmip_check_enum_value(enum kmip_version version, enum tag t, int value)
             case KMIP_OP_GET:
             case KMIP_OP_DESTROY:
             case KMIP_OP_QUERY:
+            case KMIP_OP_ACTIVATE:
             return(KMIP_OK);
+            break;
+
+            /* KMIP 1.2 */
+            case KMIP_OP_ENCRYPT:
+            case KMIP_OP_DECRYPT:
+            case KMIP_OP_RNG_RETRIEVE:
+            if(version >= KMIP_1_2)
+                    return(KMIP_OK);
+            else
+                    return(KMIP_INVALID_FOR_VERSION);
             break;
             
             default:
@@ -1269,6 +1302,8 @@ kmip_init(KMIP *ctx, void *buffer, size_t buffer_size, enum kmip_version v)
     ctx->credential_list = ctx->calloc_func(ctx->state, 1, sizeof(LinkedList));
     
     kmip_clear_errors(ctx);
+
+    // NOTE (fst): what is ctx->state used for here?
 }
 
 void
@@ -1579,6 +1614,44 @@ kmip_peek_tag(KMIP *ctx)
 
     return(tag);
 }
+
+/*
+ * Skips one TTLV entry
+*/
+int
+kmip_skip_tag(KMIP *ctx)
+{
+    if(BUFFER_BYTES_LEFT(ctx) < 8)
+    {
+        return(KMIP_FALSE);
+    }
+
+    uint8 *index = ctx->index;
+    uint32 length = 0;
+
+    /* skip TAG & TYPE */
+    ctx->index += 4;
+
+    /* read LENGTH and skip if possible */
+    length |= ((int32)*ctx->index++ << 24);
+    length |= ((int32)*ctx->index++ << 16);
+    length |= ((int32)*ctx->index++ << 8);
+    length |= ((int32)*ctx->index++ << 0);
+    length += CALCULATE_PADDING(length);
+
+    if(BUFFER_BYTES_LEFT(ctx) >= length)
+    {
+        // we can skip over the TTLV entry
+        ctx->index += length;
+        return(KMIP_TRUE);
+    }
+
+    // could not skip: rewind index
+    ctx->index = index;
+
+    return(KMIP_FALSE);
+}
+
 
 int
 kmip_is_attribute_tag(uint32 value)
@@ -2587,6 +2660,18 @@ kmip_free_request_batch_item(KMIP *ctx, RequestBatchItem *value)
                 kmip_free_query_request_payload(ctx, (QueryRequestPayload *)value->request_payload);
                 break;
 
+                case KMIP_OP_ENCRYPT:
+                kmip_free_encrypt_request_payload(ctx, (EncryptRequestPayload *)value->request_payload);
+                break;
+
+                case KMIP_OP_DECRYPT:
+                kmip_free_decrypt_request_payload(ctx, (DecryptRequestPayload *)value->request_payload);
+                break;
+
+                case KMIP_OP_ACTIVATE:
+                kmip_free_activate_request_payload(ctx, (ActivateRequestPayload *)value->request_payload);
+                break;
+
                 default:
                 /* NOTE (ph) Hitting this case means that we don't know    */
                 /*      what the actual type, size, or value of            */
@@ -2654,6 +2739,18 @@ kmip_free_response_batch_item(KMIP *ctx, ResponseBatchItem *value)
                 
                 case KMIP_OP_QUERY:
                 kmip_free_query_response_payload(ctx, (QueryResponsePayload *)value->response_payload);
+                break;
+
+                case KMIP_OP_ENCRYPT:
+                kmip_free_encrypt_response_payload(ctx, (EncryptResponsePayload *)value->response_payload);
+                break;
+
+                case KMIP_OP_DECRYPT:
+                kmip_free_decrypt_response_payload(ctx, (DecryptResponsePayload *)value->response_payload);
+                break;
+
+                case KMIP_OP_ACTIVATE:
+                kmip_free_activate_response_payload(ctx, (ActivateResponsePayload *)value->response_payload);
                 break;
 
                 default:
@@ -3146,6 +3243,7 @@ kmip_free_operations(KMIP *ctx, Operations *value)
 
     return;
 }
+
 void
 kmip_free_objects(KMIP *ctx, ObjectTypes* value)
 {
@@ -3164,6 +3262,237 @@ kmip_free_objects(KMIP *ctx, ObjectTypes* value)
             ctx->free_func(ctx->state, value->object_list);
             value->object_list = NULL;
         }
+    }
+
+    return;
+}
+
+void
+kmip_free_encrypt_request_payload(KMIP *ctx, EncryptRequestPayload *value)
+{
+    if(ctx == NULL || value == NULL)
+    {
+        return;
+    }
+
+    if(value->unique_identifier != NULL)
+    {
+        kmip_free_text_string(ctx, value->unique_identifier);
+        ctx->free_func(ctx->state, value->unique_identifier);
+        value->unique_identifier = NULL;
+    }
+
+    if(value->cryptographic_parameters != NULL)
+    {
+        kmip_free_cryptographic_parameters(ctx, value->cryptographic_parameters);
+        ctx->free_func(ctx->state, value->cryptographic_parameters);
+        value->cryptographic_parameters = NULL;
+    }
+
+    if(value->data != NULL)
+    {
+        kmip_free_byte_string(ctx, value->data);
+        ctx->free_func(ctx->state, value->data);
+        value->data = NULL;
+    }
+
+    if(value->iv_counter_nonce != NULL)
+    {
+        kmip_free_byte_string(ctx, value->iv_counter_nonce);
+        ctx->free_func(ctx->state, value->iv_counter_nonce);
+        value->iv_counter_nonce = NULL;
+    }
+
+    if(value->correlation_value != NULL)
+    {
+        kmip_free_text_string(ctx, value->correlation_value);
+        ctx->free_func(ctx->state, value->correlation_value);
+        value->correlation_value = NULL;
+    }
+
+    if(value->authenticated_encryption_additional_data != NULL)
+    {
+        kmip_free_byte_string(ctx, value->authenticated_encryption_additional_data);
+        ctx->free_func(ctx->state, value->authenticated_encryption_additional_data);
+        value->authenticated_encryption_additional_data = NULL;
+    }
+
+    // NOTE (fst): other parameters are bool32 and don't need to be deallocated
+
+    return;
+}
+
+void
+kmip_free_decrypt_request_payload(KMIP *ctx, DecryptRequestPayload *value)
+{
+    if(ctx == NULL || value == NULL)
+    {
+        return;
+    }
+
+    if(value->unique_identifier != NULL)
+    {
+        kmip_free_text_string(ctx, value->unique_identifier);
+        ctx->free_func(ctx->state, value->unique_identifier);
+        value->unique_identifier = NULL;
+    }
+
+    if(value->cryptographic_parameters != NULL)
+    {
+        kmip_free_cryptographic_parameters(ctx, value->cryptographic_parameters);
+        ctx->free_func(ctx->state, value->cryptographic_parameters);
+        value->cryptographic_parameters = NULL;
+    }
+
+    if(value->data != NULL)
+    {
+        kmip_free_byte_string(ctx, value->data);
+        ctx->free_func(ctx->state, value->data);
+        value->data = NULL;
+    }
+
+    if(value->iv_counter_nonce != NULL)
+    {
+        kmip_free_byte_string(ctx, value->iv_counter_nonce);
+        ctx->free_func(ctx->state, value->iv_counter_nonce);
+        value->iv_counter_nonce = NULL;
+    }
+
+    if(value->correlation_value != NULL)
+    {
+        kmip_free_text_string(ctx, value->correlation_value);
+        ctx->free_func(ctx->state, value->correlation_value);
+        value->correlation_value = NULL;
+    }
+
+    if(value->authenticated_encryption_additional_data != NULL)
+    {
+        kmip_free_byte_string(ctx, value->authenticated_encryption_additional_data);
+        ctx->free_func(ctx->state, value->authenticated_encryption_additional_data);
+        value->authenticated_encryption_additional_data = NULL;
+    }
+
+    if(value->authenticated_encryption_tag != NULL)
+    {
+        kmip_free_byte_string(ctx, value->authenticated_encryption_tag);
+        ctx->free_func(ctx->state, value->authenticated_encryption_tag);
+        value->authenticated_encryption_tag = NULL;
+    }
+
+    // NOTE (fst): other parameters are bool32 and don't need to be deallocated
+
+    return;
+}
+
+void
+kmip_free_activate_request_payload(KMIP *ctx, ActivateRequestPayload *value)
+{
+    if(ctx == NULL || value == NULL)
+    {
+        return;
+    }
+
+    if(value->unique_identifier != NULL)
+    {
+        kmip_free_text_string(ctx, value->unique_identifier);
+        ctx->free_func(ctx->state, value->unique_identifier);
+        value->unique_identifier = NULL;
+    }
+
+    return;
+}
+
+void
+kmip_free_encrypt_response_payload(KMIP *ctx, EncryptResponsePayload *value)
+{
+    if(ctx == NULL || value == NULL)
+    {
+        return;
+    }
+
+    if(value->unique_identifier != NULL)
+    {
+        kmip_free_text_string(ctx, value->unique_identifier);
+        ctx->free_func(ctx->state, value->unique_identifier);
+        value->unique_identifier = NULL;
+    }
+
+    if(value->data != NULL)
+    {
+        kmip_free_byte_string(ctx, value->data);
+        ctx->free_func(ctx->state, value->data);
+        value->data = NULL;
+    }
+
+    if(value->iv_counter_nonce != NULL)
+    {
+        kmip_free_byte_string(ctx, value->iv_counter_nonce);
+        ctx->free_func(ctx->state, value->iv_counter_nonce);
+        value->iv_counter_nonce = NULL;
+    }
+
+    if(value->correlation_value != NULL)
+    {
+        kmip_free_text_string(ctx, value->correlation_value);
+        ctx->free_func(ctx->state, value->correlation_value);
+        value->correlation_value = NULL;
+    }
+
+    if(value->authenticated_encryption_tag != NULL)
+    {
+        kmip_free_byte_string(ctx, value->authenticated_encryption_tag);
+        ctx->free_func(ctx->state, value->authenticated_encryption_tag);
+        value->authenticated_encryption_tag = NULL;
+    }
+
+    return;
+}
+
+void
+kmip_free_decrypt_response_payload(KMIP *ctx, DecryptResponsePayload *value)
+{
+    if(ctx == NULL || value == NULL)
+    {
+        return;
+    }
+
+    if(value->unique_identifier != NULL)
+    {
+        kmip_free_text_string(ctx, value->unique_identifier);
+        ctx->free_func(ctx->state, value->unique_identifier);
+        value->unique_identifier = NULL;
+    }
+
+    if(value->data != NULL)
+    {
+        kmip_free_byte_string(ctx, value->data);
+        ctx->free_func(ctx->state, value->data);
+        value->data = NULL;
+    }
+
+    if(value->correlation_value != NULL)
+    {
+        kmip_free_text_string(ctx, value->correlation_value);
+        ctx->free_func(ctx->state, value->correlation_value);
+        value->correlation_value = NULL;
+    }
+
+    return;
+}
+
+void
+kmip_free_activate_response_payload(KMIP *ctx, ActivateResponsePayload *value)
+{
+    if(ctx == NULL || value == NULL)
+    {
+        return;
+    }
+
+    if(value->unique_identifier != NULL)
+    {
+        kmip_free_text_string(ctx, value->unique_identifier);
+        ctx->free_func(ctx->state, value->unique_identifier);
+        value->unique_identifier = NULL;
     }
 
     return;
@@ -4992,6 +5321,15 @@ kmip_compare_request_batch_item(const RequestBatchItem *a, const RequestBatchIte
                     return(KMIP_FALSE);
                 }
                 break;
+
+                case KMIP_OP_ENCRYPT:
+                case KMIP_OP_DECRYPT:
+                case KMIP_OP_ACTIVATE:
+                {
+                    // NOTE (fst) not implemented
+                    return(KMIP_FALSE);
+                }
+                break;
                 
                 default:
                 /* NOTE (ph) Unsupported payloads cannot be compared. */
@@ -5101,6 +5439,15 @@ kmip_compare_response_batch_item(const ResponseBatchItem *a, const ResponseBatch
                 case KMIP_OP_QUERY:
                 if(kmip_compare_query_response_payload((QueryResponsePayload *)a->response_payload, (QueryResponsePayload *)b->response_payload) == KMIP_FALSE)
                 {
+                    return(KMIP_FALSE);
+                }
+                break;
+
+                case KMIP_OP_ENCRYPT:
+                case KMIP_OP_DECRYPT:
+                case KMIP_OP_ACTIVATE:
+                {
+                    // NOTE (fst) not implemented
                     return(KMIP_FALSE);
                 }
                 break;
@@ -6131,6 +6478,163 @@ kmip_compare_query_response_payload(const QueryResponsePayload *a, const QueryRe
         }
     }
 
+    return(KMIP_TRUE);
+}
+
+int
+kmip_compare_activate_response_payload(const ActivateResponsePayload *a, const ActivateResponsePayload *b)
+{
+    if(a != b)
+    {
+        if((a == NULL) || (b == NULL))
+        {
+            return(KMIP_FALSE);
+        }
+
+        if(a->unique_identifier != b->unique_identifier)
+        {
+            if((a->unique_identifier == NULL) || (b->unique_identifier == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_text_string(a->unique_identifier, b->unique_identifier) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+    }
+    return(KMIP_TRUE);
+}
+
+int
+kmip_compare_encrypt_response_payload(const EncryptResponsePayload *a, const EncryptResponsePayload *b)
+{
+    if(a != b)
+    {
+        if((a == NULL) || (b == NULL))
+        {
+            return(KMIP_FALSE);
+        }
+
+        if(a->unique_identifier != b->unique_identifier)
+        {
+            if((a->unique_identifier == NULL) || (b->unique_identifier == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_text_string(a->unique_identifier, b->unique_identifier) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+
+        if(a->data != b->data)
+        {
+            if((a->data == NULL) || (b->data == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_byte_string(a->data, b->data) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+
+        if(a->iv_counter_nonce != b->iv_counter_nonce)
+        {
+            if((a->iv_counter_nonce == NULL) || (b->iv_counter_nonce == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_byte_string(a->iv_counter_nonce, b->iv_counter_nonce) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+
+        if(a->correlation_value != b->correlation_value)
+        {
+            if((a->correlation_value == NULL) || (b->correlation_value == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_text_string(a->correlation_value, b->correlation_value) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+
+        if(a->authenticated_encryption_tag != b->authenticated_encryption_tag)
+        {
+            if((a->authenticated_encryption_tag == NULL) || (b->authenticated_encryption_tag == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_byte_string(a->authenticated_encryption_tag, b->authenticated_encryption_tag) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+    
+    }
+    return(KMIP_TRUE);
+}
+
+int
+kmip_compare_decrypt_response_payload(const DecryptResponsePayload *a, const DecryptResponsePayload *b)
+{
+    if(a != b)
+    {
+        if((a == NULL) || (b == NULL))
+        {
+            return(KMIP_FALSE);
+        }
+
+        if(a->unique_identifier != b->unique_identifier)
+        {
+            if((a->unique_identifier == NULL) || (b->unique_identifier == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_text_string(a->unique_identifier, b->unique_identifier) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+
+        if(a->data != b->data)
+        {
+            if((a->data == NULL) || (b->data == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_byte_string(a->data, b->data) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+
+        if(a->correlation_value != b->correlation_value)
+        {
+            if((a->correlation_value == NULL) || (b->correlation_value == NULL))
+            {
+                return(KMIP_FALSE);
+            }
+
+            if(kmip_compare_text_string(a->correlation_value, b->correlation_value) == KMIP_FALSE)
+            {
+                return(KMIP_FALSE);
+            }
+        }
+    }
     return(KMIP_TRUE);
 }
 
@@ -8235,6 +8739,19 @@ kmip_encode_request_batch_item(KMIP *ctx, const RequestBatchItem *value)
         result = kmip_encode_query_request_payload(ctx, (QueryRequestPayload*)value->request_payload);
         break;
 
+        case KMIP_OP_ENCRYPT:
+        result = kmip_encode_encrypt_request_payload(ctx, (EncryptRequestPayload*)value->request_payload);
+        break;
+
+        case KMIP_OP_DECRYPT:
+        result = kmip_encode_decrypt_request_payload(ctx, (DecryptRequestPayload*)value->request_payload);
+        break;
+
+        case KMIP_OP_ACTIVATE:
+        result = kmip_encode_activate_request_payload(ctx, (ActivateRequestPayload*)value->request_payload);
+        break;
+
+
         default:
         kmip_push_error_frame(ctx, __func__, __LINE__);
         return(KMIP_NOT_IMPLEMENTED);
@@ -8310,6 +8827,22 @@ kmip_encode_response_batch_item(KMIP *ctx, const ResponseBatchItem *value)
         case KMIP_OP_QUERY:
         result = kmip_encode_query_response_payload(ctx, (QueryResponsePayload*)value->response_payload);
         break;
+
+        case KMIP_OP_ENCRYPT:
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_NOT_IMPLEMENTED);
+        break;
+
+        case KMIP_OP_DECRYPT:
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_NOT_IMPLEMENTED);
+        break;
+
+        case KMIP_OP_ACTIVATE:
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_NOT_IMPLEMENTED);
+        break;
+
 
         default:
         kmip_push_error_frame(ctx, __func__, __LINE__);
@@ -8445,6 +8978,237 @@ kmip_encode_query_response_payload(KMIP *ctx, const QueryResponsePayload *value)
     (void) value;
     return(KMIP_NOT_IMPLEMENTED);
 }
+
+/*
+ * Encode ActivateRequestPayload
+ *
+ * This is the main payload for Activate operations.
+ *
+ * Optional fields: unique_identifier
+ */
+int kmip_encode_activate_request_payload(KMIP *ctx, ActivateRequestPayload *value)
+{
+    int result = 0;
+
+    /* Write the request payload tag and type */
+    result = kmip_encode_int32_be(ctx, TAG_TYPE(KMIP_TAG_REQUEST_PAYLOAD, KMIP_TYPE_STRUCTURE));
+    CHECK_RESULT(ctx, result);
+
+    /* Reserve space for length */
+    uint8 *length_index = ctx->index;
+    uint8 *value_index = ctx->index += 4;
+
+    /* Encode unique_identifier if present (key ID) */
+    if(value->unique_identifier != NULL)
+    {
+        result = kmip_encode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, value->unique_identifier);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Calculate and write the length */
+    uint8 *curr_index = ctx->index;
+    ctx->index = length_index;
+    result = kmip_encode_length(ctx, curr_index - value_index);
+    CHECK_RESULT(ctx, result);
+    ctx->index = curr_index;
+
+    return(KMIP_OK);
+}
+
+/*
+ * Encode EncryptRequestPayload
+ *
+ * This is the main payload for Encrypt operations.
+ * Required field: data
+ * Optional fields: unique_identifier, iv_counter_nonce,
+ *                  authenticated_encryption_additional_data,
+ *                  cryptographic_parameters
+ */
+int
+kmip_encode_encrypt_request_payload(KMIP *ctx, const EncryptRequestPayload *value)
+{
+    CHECK_KMIP_VERSION(ctx, KMIP_1_2);
+
+    int result = 0;
+
+    /* Write the request payload tag and type */
+    result = kmip_encode_int32_be(ctx, TAG_TYPE(KMIP_TAG_REQUEST_PAYLOAD, KMIP_TYPE_STRUCTURE));
+    CHECK_RESULT(ctx, result);
+
+    /* Reserve space for length */
+    uint8 *length_index = ctx->index;
+    uint8 *value_index = ctx->index += 4;
+
+    /* Encode unique_identifier if present (key ID) */
+    if(value->unique_identifier != NULL)
+    {
+        result = kmip_encode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, value->unique_identifier);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode cryptographic parameters if provided */
+    if(value->cryptographic_parameters != NULL)
+    {
+        result = kmip_encode_cryptographic_parameters(ctx, value->cryptographic_parameters);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode data (plaintext) - REQUIRED as we only support single-part for now */
+    if(value->data != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_DATA, value->data);
+        CHECK_RESULT(ctx, result);
+    }
+    else
+    {
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return KMIP_INVALID_FIELD;
+    }
+
+    /* Encode IV/nonce if provided */
+    if(value->iv_counter_nonce != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_IV_COUNTER_NONCE, value->iv_counter_nonce);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode correlation value if provided */
+    if(value->correlation_value != NULL)
+    {
+        result = kmip_encode_text_string(ctx, KMIP_TAG_CORRELATION_VALUE, value->correlation_value);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode init indicator if provided */
+    if(value->init_indicator != KMIP_UNSET)
+    {
+        result = kmip_encode_bool(ctx, KMIP_TAG_INIT_INDICATOR, value->init_indicator);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode final indicator if provided */
+    if(value->final_indicator != KMIP_UNSET)
+    {
+        result = kmip_encode_bool(ctx, KMIP_TAG_FINAL_INDICATOR, value->final_indicator);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode AAD for GCM mode if provided */
+    if(value->authenticated_encryption_additional_data != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_AUTHENTICATED_ENCRYPTION_ADDITIONAL_DATA, value->authenticated_encryption_additional_data);
+        CHECK_RESULT(ctx, result);
+    }
+
+
+    /* Calculate and write the length */
+    uint8 *curr_index = ctx->index;
+    ctx->index = length_index;
+    result = kmip_encode_length(ctx, curr_index - value_index);
+    CHECK_RESULT(ctx, result);
+    ctx->index = curr_index;
+
+    return(KMIP_OK);
+}
+
+/*
+ * Encode DecryptRequestPayload
+ *
+ * Similar to encrypt, but for decryption.
+ * Required fields: data, iv_counter_nonce (for most modes)
+ */
+int
+kmip_encode_decrypt_request_payload(KMIP *ctx, const DecryptRequestPayload *value)
+{
+    CHECK_KMIP_VERSION(ctx, KMIP_1_2);
+
+    int result = 0;
+
+    result = kmip_encode_int32_be(ctx, TAG_TYPE(KMIP_TAG_REQUEST_PAYLOAD, KMIP_TYPE_STRUCTURE));
+    CHECK_RESULT(ctx, result);
+
+    uint8 *length_index = ctx->index;
+    uint8 *value_index = ctx->index += 4;
+
+    /* Encode unique_identifier if present */
+    if(value->unique_identifier != NULL)
+    {
+        result = kmip_encode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, value->unique_identifier);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode cryptographic parameters if provided */
+    if(value->cryptographic_parameters != NULL)
+    {
+        result = kmip_encode_cryptographic_parameters(ctx, value->cryptographic_parameters);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode data (ciphertext) - REQUIRED as we only support single-part for now */
+    if(value->data != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_DATA, value->data);
+        CHECK_RESULT(ctx, result);
+    }
+    else
+    {
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_INVALID_FIELD);
+    }
+
+    /* Encode IV - optional but usually REQUIRED for decryption */
+    if(value->iv_counter_nonce != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_IV_COUNTER_NONCE, value->iv_counter_nonce);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode correlation value if provided */
+    if(value->correlation_value != NULL)
+    {
+        result = kmip_encode_text_string(ctx, KMIP_TAG_CORRELATION_VALUE, value->correlation_value);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode init indicator if provided */
+    if(value->init_indicator != KMIP_UNSET)
+    {
+        result = kmip_encode_bool(ctx, KMIP_TAG_INIT_INDICATOR, value->init_indicator);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode final indicator if provided */
+    if(value->final_indicator != KMIP_UNSET)
+    {
+        result = kmip_encode_bool(ctx, KMIP_TAG_FINAL_INDICATOR, value->final_indicator);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode AAD for GCM mode if provided */
+    if(value->authenticated_encryption_additional_data != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_AUTHENTICATED_ENCRYPTION_ADDITIONAL_DATA, value->authenticated_encryption_additional_data);
+        CHECK_RESULT(ctx, result);
+    }
+
+    /* Encode auth tag for GCM mode if provided */
+    if(value->authenticated_encryption_tag != NULL)
+    {
+        result = kmip_encode_byte_string(ctx, KMIP_TAG_AUTHENTICATED_ENCRYPTION_TAG, value->authenticated_encryption_tag);
+        CHECK_RESULT(ctx, result);
+    }
+
+
+    /* Calculate and write the length */
+    uint8 *curr_index = ctx->index;
+    ctx->index = length_index;
+    result = kmip_encode_length(ctx, curr_index - value_index);
+    CHECK_RESULT(ctx, result);
+    ctx->index = curr_index;
+
+    return(KMIP_OK);
+}
+
 
 /*
 Decoding Functions
@@ -10404,6 +11168,21 @@ kmip_decode_request_batch_item(KMIP *ctx, RequestBatchItem *value)
         result = kmip_decode_query_request_payload(ctx, (QueryRequestPayload*)value->request_payload);
         break;
 
+        case KMIP_OP_ENCRYPT:
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_NOT_IMPLEMENTED);
+        break;
+
+        case KMIP_OP_DECRYPT:
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_NOT_IMPLEMENTED);
+        break;
+
+        case KMIP_OP_ACTIVATE:
+        kmip_push_error_frame(ctx, __func__, __LINE__);
+        return(KMIP_NOT_IMPLEMENTED);
+        break;
+
         default:
         kmip_push_error_frame(ctx, __func__, __LINE__);
         return(KMIP_NOT_IMPLEMENTED);
@@ -10502,6 +11281,25 @@ kmip_decode_response_batch_item(KMIP *ctx, ResponseBatchItem *value)
             CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(QueryResponsePayload), "QueryResponsePayload structure");
             result = kmip_decode_query_response_payload(ctx, value->response_payload);
             break;
+
+            case KMIP_OP_ENCRYPT:
+            value->response_payload = ctx->calloc_func(ctx->state, 1, sizeof(EncryptResponsePayload));
+            CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(EncryptResponsePayload), "EncryptResponsePayload structure");
+            result = kmip_decode_encrypt_response_payload(ctx, value->response_payload);
+            break;
+
+            case KMIP_OP_DECRYPT:
+            value->response_payload = ctx->calloc_func(ctx->state, 1, sizeof(DecryptResponsePayload));
+            CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(DecryptResponsePayload), "DecryptResponsePayload structure");
+            result = kmip_decode_decrypt_response_payload(ctx, value->response_payload);
+            break;
+
+            case KMIP_OP_ACTIVATE:
+            value->response_payload = ctx->calloc_func(ctx->state, 1, sizeof(ActivateResponsePayload));
+            CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(ActivateResponsePayload), "ActivateResponsePayload structure");
+            result = kmip_decode_activate_response_payload(ctx, value->response_payload);
+            break;
+
 
             default:
             kmip_push_error_frame(ctx, __func__, __LINE__);
@@ -11342,3 +12140,247 @@ kmip_decode_query_response_payload(KMIP *ctx, QueryResponsePayload *value)
     return(KMIP_OK);
 }
 
+/*
+ * Decode ActivateResponsePayload
+ *
+ * This is what we get back from the server after activation of a key.
+ */
+int
+kmip_decode_activate_response_payload(KMIP *ctx, ActivateResponsePayload *value)
+{
+    CHECK_DECODE_ARGS(ctx, value);
+    CHECK_BUFFER_FULL(ctx, 8);
+
+    int result = 0;
+    int32 tag_type = 0;
+    uint32 length = 0;
+
+    /* Read and verify tag/type */
+    result = kmip_decode_int32_be(ctx, &tag_type);
+    CHECK_RESULT(ctx, result);
+    CHECK_TAG_TYPE(ctx, tag_type, KMIP_TAG_RESPONSE_PAYLOAD, KMIP_TYPE_STRUCTURE);
+
+    /* Read length */
+    result = kmip_decode_length(ctx, &length);
+    CHECK_RESULT(ctx, result);
+    CHECK_BUFFER_FULL(ctx, length);
+
+    /* Allocate memory for mandatory fields */
+    value->unique_identifier = ctx->calloc_func(ctx->state, 1, sizeof(TextString));
+    CHECK_NEW_MEMORY(ctx, value->unique_identifier, sizeof(TextString), "Unique Identifier as TextString");
+
+    /* Track position */
+    uint8 *value_index = ctx->index;
+
+    /* Decode fields in any order */
+    while((ctx->index - value_index) < length)
+    {
+        uint32 tag = kmip_peek_tag(ctx);
+
+        switch(tag)
+        {
+            case KMIP_TAG_UNIQUE_IDENTIFIER:
+                result = kmip_decode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, value->unique_identifier);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            default:
+                /* Skip unknown tags */
+                result = kmip_skip_tag(ctx);
+                CHECK_RESULT(ctx, result);
+                /* TODO: Should we extra handle unknown tags? */
+                break;
+        }
+    }
+
+    return(KMIP_OK);
+}
+
+
+/*
+ * Decode EncryptResponsePayload
+ *
+ * This is what we get back from the server after encryption.
+ */
+int
+kmip_decode_encrypt_response_payload(KMIP *ctx, EncryptResponsePayload *value)
+{
+    CHECK_DECODE_ARGS(ctx, value);
+    CHECK_BUFFER_FULL(ctx, 8);
+
+    int result = 0;
+    int32 tag_type = 0;
+    uint32 length = 0;
+
+    /* Read and verify tag/type */
+    result = kmip_decode_int32_be(ctx, &tag_type);
+    CHECK_RESULT(ctx, result);
+    CHECK_TAG_TYPE(ctx, tag_type, KMIP_TAG_RESPONSE_PAYLOAD, KMIP_TYPE_STRUCTURE);
+
+    /* Read length */
+    result = kmip_decode_length(ctx, &length);
+    CHECK_RESULT(ctx, result);
+    CHECK_BUFFER_FULL(ctx, length);
+
+    /* Allocate memory for mandatory fields */
+    value->unique_identifier = ctx->calloc_func(ctx->state, 1, sizeof(TextString));
+    CHECK_NEW_MEMORY(ctx, value->unique_identifier, sizeof(TextString), "Unique Identifier as TextString");
+
+    /* Optional fields start as NULL */
+    value->data = NULL;
+    value->iv_counter_nonce = NULL;
+    value->correlation_value = NULL;
+    value->authenticated_encryption_tag = NULL;
+
+    /* Track position */
+    uint8 *value_index = ctx->index;
+
+    /* Decode fields in any order */
+    while((ctx->index - value_index) < length)
+    {
+        uint32 tag = kmip_peek_tag(ctx);
+
+        switch(tag)
+        {
+            case KMIP_TAG_UNIQUE_IDENTIFIER:
+                result = kmip_decode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, value->unique_identifier);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            case KMIP_TAG_DATA:
+                /* Allocate on demand for optional data field */
+                if(value->data == NULL)
+                {
+                    value->data = ctx->calloc_func(ctx->state, 1, sizeof(ByteString));
+                    CHECK_NEW_MEMORY(ctx, value->data, sizeof(ByteString), "Data Ciphertext as ByteString");
+                }
+                result = kmip_decode_byte_string(ctx, KMIP_TAG_DATA, value->data);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            case KMIP_TAG_IV_COUNTER_NONCE:
+                /* Allocate on demand for optional iv_counter_nonce field */
+                if(value->iv_counter_nonce == NULL)
+                {
+                    value->iv_counter_nonce = ctx->calloc_func(ctx->state, 1, sizeof(ByteString));
+                    CHECK_NEW_MEMORY(ctx, value->iv_counter_nonce, sizeof(ByteString), "IV_Counter_Nonce as ByteString");
+                }
+                result = kmip_decode_byte_string(ctx, KMIP_TAG_IV_COUNTER_NONCE, value->iv_counter_nonce);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            case KMIP_TAG_CORRELATION_VALUE:
+                /* Allocate on demand for optional correlation_value field */
+                if(value->correlation_value == NULL)
+                {
+                    value->correlation_value = ctx->calloc_func(ctx->state, 1, sizeof(TextString));
+                    CHECK_NEW_MEMORY(ctx, value->correlation_value, sizeof(TextString), "Correlation Value as TextString");
+                }
+                result = kmip_decode_text_string(ctx, KMIP_TAG_CORRELATION_VALUE, value->correlation_value);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            case KMIP_TAG_AUTHENTICATED_ENCRYPTION_TAG:
+                /* Allocate on demand for optional authenticated_encryption_tag field */
+                if(value->authenticated_encryption_tag == NULL)
+                {
+                    value->authenticated_encryption_tag = ctx->calloc_func(ctx->state, 1, sizeof(ByteString));
+                    CHECK_NEW_MEMORY(ctx, value->authenticated_encryption_tag, sizeof(ByteString), "authenticated_encryption_tag as ByteString");
+                }
+                result = kmip_decode_byte_string(ctx, KMIP_TAG_AUTHENTICATED_ENCRYPTION_TAG, value->authenticated_encryption_tag);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            default:
+                /* Skip unknown tags */
+                result = kmip_skip_tag(ctx);
+                CHECK_RESULT(ctx, result);
+                /* TODO: Should we extra handle unknown tags? */
+                break;
+        }
+    }
+
+    return(KMIP_OK);
+}
+
+/*
+ * Decode DecryptResponsePayload
+ *
+ * This is what we get back from the server after decryption.
+ */
+int
+kmip_decode_decrypt_response_payload(KMIP *ctx, DecryptResponsePayload *value)
+{
+    CHECK_DECODE_ARGS(ctx, value);
+    CHECK_BUFFER_FULL(ctx, 8);
+
+    int result = 0;
+    int32 tag_type = 0;
+    uint32 length = 0;
+
+    /* Read and verify tag/type */
+    result = kmip_decode_int32_be(ctx, &tag_type);
+    CHECK_RESULT(ctx, result);
+    CHECK_TAG_TYPE(ctx, tag_type, KMIP_TAG_RESPONSE_PAYLOAD, KMIP_TYPE_STRUCTURE);
+
+    /* Read length */
+    result = kmip_decode_length(ctx, &length);
+    CHECK_RESULT(ctx, result);
+    CHECK_BUFFER_FULL(ctx, length);
+
+    /* Allocate memory for mandatory fields */
+    value->unique_identifier = ctx->calloc_func(ctx->state, 1, sizeof(TextString));
+    CHECK_NEW_MEMORY(ctx, value->unique_identifier, sizeof(TextString), "Unique Identifier as TextString");
+
+    /* Optional fields start as NULL */
+    value->data = NULL;
+    value->correlation_value = NULL;
+
+    /* Track position */
+    uint8 *value_index = ctx->index;
+
+    /* Decode fields in any order */
+    while((ctx->index - value_index) < length)
+    {
+        uint32 tag = kmip_peek_tag(ctx);
+
+        switch(tag)
+        {
+            case KMIP_TAG_UNIQUE_IDENTIFIER:
+                result = kmip_decode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, value->unique_identifier);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            case KMIP_TAG_DATA:
+                /* Allocate on demand for optional data field */
+                if(value->data == NULL)
+                {
+                    value->data = ctx->calloc_func(ctx->state, 1, sizeof(ByteString));
+                    CHECK_NEW_MEMORY(ctx, value->data, sizeof(ByteString), "Data Plaintext as ByteString");
+                }
+                result = kmip_decode_byte_string(ctx, KMIP_TAG_DATA, value->data);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            case KMIP_TAG_CORRELATION_VALUE:
+                /* Allocate on demand for optional correlation_value field */
+                if(value->correlation_value == NULL)
+                {
+                    value->correlation_value = ctx->calloc_func(ctx->state, 1, sizeof(TextString));
+                    CHECK_NEW_MEMORY(ctx, value->correlation_value, sizeof(TextString), "Correlation Value as TextString");
+                }
+                result = kmip_decode_text_string(ctx, KMIP_TAG_CORRELATION_VALUE, value->correlation_value);
+                CHECK_RESULT(ctx, result);
+                break;
+
+            default:
+                /* Skip unknown tags */
+                result = kmip_skip_tag(ctx);
+                CHECK_RESULT(ctx, result);
+                /* TODO: Should we extra handle unknown tags? */
+                break;
+        }
+    }
+
+    return(KMIP_OK);
+}

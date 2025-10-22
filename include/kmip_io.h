@@ -94,5 +94,11 @@ void kmip_print_object_types(FILE*, int, ObjectTypes*);
 void kmip_print_query_request_payload(FILE*, int, QueryRequestPayload *);
 void kmip_print_query_response_payload(FILE*, int, QueryResponsePayload *);
 void kmip_print_server_information(FILE*, int, ServerInformation*);
+void kmip_print_activate_request_payload(FILE *f, int indent, ActivateRequestPayload *value);
+void kmip_print_activate_response_payload(FILE *f, int indent, ActivateResponsePayload *value);
+void kmip_print_encrypt_request_payload(FILE *f, int indent, EncryptRequestPayload *value);
+void kmip_print_encrypt_response_payload(FILE *f, int indent, EncryptResponsePayload *value);
+void kmip_print_decrypt_request_payload(FILE *f, int indent, DecryptRequestPayload *value);
+void kmip_print_decrypt_response_payload(FILE *f, int indent, DecryptResponsePayload *value);
 
 #endif  /* KMIP_IO_H */

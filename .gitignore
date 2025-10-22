@@ -2,3 +2,7 @@
 *.a
 *.lo
 *.so*
+bin/*
+.vscode
+.cache
+compile_commands.json
