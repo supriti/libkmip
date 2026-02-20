@@ -73,6 +73,7 @@ DEMO_O_FILES += $(OBJ_DIR)/demo_query.o
 DEMO_O_FILES += $(OBJ_DIR)/demo_encrypt.o
 DEMO_O_FILES += $(OBJ_DIR)/demo_encrypt_aead.o
 DEMO_O_FILES += $(OBJ_DIR)/demo_activate.o
+DEMO_O_FILES += $(OBJ_DIR)/demo_revoke.o   # Added demo_revoke.o
 
 TEST_O_FILES = $(OBJ_DIR)/tests.o
 
@@ -90,9 +91,10 @@ demos: objs \
        $(BIN_DIR)/demo_create \
        $(BIN_DIR)/demo_destroy \
        $(BIN_DIR)/demo_query \
-	   $(BIN_DIR)/demo_encrypt \
-	   $(BIN_DIR)/demo_encrypt_aead \
-	   $(BIN_DIR)/demo_activate
+       $(BIN_DIR)/demo_encrypt \
+       $(BIN_DIR)/demo_encrypt_aead \
+       $(BIN_DIR)/demo_activate \
+       $(BIN_DIR)/demo_revoke    # Added bin/demo_revoke
 
 tests: objs \
        $(TEST_O_FILES) \
@@ -115,6 +117,8 @@ $(BIN_DIR)/demo_encrypt: $(OBJ_DIR)/demo_encrypt.o $(SRC_O_FILES)
 $(BIN_DIR)/demo_encrypt_aead: $(OBJ_DIR)/demo_encrypt_aead.o $(SRC_O_FILES)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 $(BIN_DIR)/demo_activate: $(OBJ_DIR)/demo_activate.o $(SRC_O_FILES)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+$(BIN_DIR)/demo_revoke: $(OBJ_DIR)/demo_revoke.o $(SRC_O_FILES)    # Added link rule
 	$(CC) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BIN_DIR)/tests: $(TEST_O_FILES) $(OBJ_DIR)/kmip.o $(OBJ_DIR)/kmip_io.o $(OBJ_DIR)/kmip_memset.o
@@ -143,6 +147,8 @@ $(OBJ_DIR)/demo_encrypt.o: $(DEMO_DIR)/demo_encrypt.c $(H_FILES)
 $(OBJ_DIR)/demo_encrypt_aead.o: $(DEMO_DIR)/demo_encrypt_aead.c $(H_FILES)
 	$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
 $(OBJ_DIR)/demo_activate.o: $(DEMO_DIR)/demo_activate.c $(H_FILES)
+	$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
+$(OBJ_DIR)/demo_revoke.o: $(DEMO_DIR)/demo_revoke.c $(H_FILES)     # Added compilation rule
 	$(CC) $(CFLAGS) $(INC_FLAGS) -c $< -o $@
 
 $(OBJ_DIR)/tests.o: $(TEST_DIR)/tests.c $(INC_DIR)/kmip.h $(INC_DIR)/kmip_io.h $(INC_DIR)/kmip_memset.h
@@ -196,6 +202,7 @@ install: all
 	cp $(BIN_DIR)/demo_encrypt $(DEST_DIR)$(PREFIX)/bin/$(KMIP)
 	cp $(BIN_DIR)/demo_encrypt_aead $(DEST_DIR)$(PREFIX)/bin/$(KMIP)
 	cp $(BIN_DIR)/demo_activate $(DEST_DIR)$(PREFIX)/bin/$(KMIP)
+	cp $(BIN_DIR)/demo_revoke $(DEST_DIR)$(PREFIX)/bin/$(KMIP)    # Added to install
 	cp -r $(DOCS_DIR)/source/. $(DEST_DIR)$(PREFIX)/share/doc/$(KMIP)/src
 	cp $(SRC_DIR)/*.c $(DEST_DIR)$(PREFIX)/src/$(KMIP)
 	cp $(INC_DIR)/*.h $(DEST_DIR)$(PREFIX)/include/$(KMIP)

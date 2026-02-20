@@ -697,6 +697,9 @@ enum tag
     KMIP_TAG_PROTOCOL_VERSION_MINOR           = 0x42006B,
     KMIP_TAG_PUBLIC_KEY                       = 0x42006D,
     KMIP_TAG_QUERY_FUNCTION                   = 0x420074,
+    KMIP_TAG_REVOCATION_REASON                = 0x420081,
+    KMIP_TAG_REVOCATION_REASON_CODE           = 0x420082,
+    KMIP_TAG_REVOCATION_MESSAGE               = 0x420080,
     KMIP_TAG_REQUEST_HEADER                   = 0x420077,
     KMIP_TAG_REQUEST_MESSAGE                  = 0x420078,
     KMIP_TAG_REQUEST_PAYLOAD                  = 0x420079,
@@ -821,6 +824,16 @@ enum object_group_member
     KMIP_OGM_GROUP_MEMBER_DEFAULT = 2
 };
 
+enum revocation_reason_code
+{
+    KMIP_REVOCATION_UNSPECIFIED = 0x01,
+    KMIP_REVOCATION_KEY_COMPROMISE = 0x02,
+    KMIP_REVOCATION_CA_COMPROMISE = 0x03,
+    KMIP_REVOCATION_AFFILIATION_CHANGED = 0x04,
+    KMIP_REVOCATION_SUPERSEDED = 0x05,
+    KMIP_REVOCATION_CESSATION_OF_OPERATION = 0x06,
+    KMIP_REVOCATION_PRIVILEGE_WITHDRAWN = 0x07
+};
 
 /*
 Structures
@@ -1060,6 +1073,17 @@ typedef struct create_response_payload
     TextString *unique_identifier;
     TemplateAttribute *template_attribute;
 } CreateResponsePayload;
+
+typedef struct RevocationReason {
+    enum revocation_reason_code revocation_reason_code;
+    TextString *revocation_message;
+} RevocationReason;
+
+typedef struct RevokeRequestPayload {
+    TextString *unique_identifier;
+    RevocationReason *revocation_reason;
+    // You can add CompromiseOccurrenceDate here later if needed
+} RevokeRequestPayload;
 
 typedef struct locate_request_payload
 {

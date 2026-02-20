@@ -2276,7 +2276,6 @@ kmip_bio_decrypt_with_context(
         return(encode_result);
     }
 
-
     /* Step 3: Send request and receive response */
     char *response_buffer = NULL;
     int response_size = 0;
