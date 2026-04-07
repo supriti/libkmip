@@ -9021,45 +9021,51 @@ int kmip_encode_revoke_request_payload(KMIP *ctx, RevokeRequestPayload *payload)
 {
     if (ctx == NULL || payload == NULL) return KMIP_ARG_INVALID;
 
-    kmip_encode_int32_be(ctx, (0x420079 << 8) | KMIP_TYPE_STRUCTURE);
-    uint8 *wrapper_len_ptr = ctx->index;
-    ctx->index += 4; 
-    uint8 *wrapper_start = ctx->index;
+    int result = 0;
+
+    result = kmip_encode_int32_be(ctx, TAG_TYPE(KMIP_TAG_REQUEST_PAYLOAD, KMIP_TYPE_STRUCTURE));
+    CHECK_RESULT(ctx, result);
+
+    uint8 *length_index = ctx->index;
+    uint8 *value_index = ctx->index += 4;
 
     if (payload->unique_identifier)
     {
-        kmip_encode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, payload->unique_identifier);
+        result = kmip_encode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, payload->unique_identifier);
+        CHECK_RESULT(ctx, result);
     }
 
     if (payload->revocation_reason)
     {
-        kmip_encode_int32_be(ctx, (0x420081 << 8) | KMIP_TYPE_STRUCTURE);
-        uint8 *reason_len_ptr = ctx->index;
-        ctx->index += 4;
-        uint8 *reason_start = ctx->index;
+        result = kmip_encode_int32_be(ctx, TAG_TYPE(KMIP_TAG_REVOCATION_REASON, KMIP_TYPE_STRUCTURE));
+        CHECK_RESULT(ctx, result);
 
-        kmip_encode_int32_be(ctx, (0x420082 << 8) | KMIP_TYPE_ENUMERATION);
-        kmip_encode_int32_be(ctx, 4); /* Length is 4 */
-        kmip_encode_int32_be(ctx, (int32)payload->revocation_reason->revocation_reason_code);
-        kmip_encode_int32_be(ctx, 0); /* Mandatory 4-byte padding */
+        uint8 *reason_len_index = ctx->index;
+        uint8 *reason_value_index = ctx->index += 4;
+
+        result = kmip_encode_enum(ctx, KMIP_TAG_REVOCATION_REASON_CODE,
+                                  (int32)payload->revocation_reason->revocation_reason_code);
+        CHECK_RESULT(ctx, result);
 
         if (payload->revocation_reason->revocation_message)
         {
-            kmip_encode_text_string(ctx, 0x420060, payload->revocation_reason->revocation_message);
+            result = kmip_encode_text_string(ctx, KMIP_TAG_REVOCATION_MESSAGE,
+                                             payload->revocation_reason->revocation_message);
+            CHECK_RESULT(ctx, result);
         }
 
-        uint32 r_len = (uint32)(ctx->index - reason_start);
-        reason_len_ptr[0] = (uint8)((r_len >> 24) & 0xFF);
-        reason_len_ptr[1] = (uint8)((r_len >> 16) & 0xFF);
-        reason_len_ptr[2] = (uint8)((r_len >> 8) & 0xFF);
-        reason_len_ptr[3] = (uint8)(r_len & 0xFF);
+        uint8 *curr_index = ctx->index;
+        ctx->index = reason_len_index;
+        result = kmip_encode_length(ctx, curr_index - reason_value_index);
+        CHECK_RESULT(ctx, result);
+        ctx->index = curr_index;
     }
 
-    uint32 p_len = (uint32)(ctx->index - wrapper_start);
-    wrapper_len_ptr[0] = (uint8)((p_len >> 24) & 0xFF);
-    wrapper_len_ptr[1] = (uint8)((p_len >> 16) & 0xFF);
-    wrapper_len_ptr[2] = (uint8)((p_len >> 8) & 0xFF);
-    wrapper_len_ptr[3] = (uint8)(p_len & 0xFF);
+    uint8 *curr_index = ctx->index;
+    ctx->index = length_index;
+    result = kmip_encode_length(ctx, curr_index - value_index);
+    CHECK_RESULT(ctx, result);
+    ctx->index = curr_index;
 
     return KMIP_OK;
 }

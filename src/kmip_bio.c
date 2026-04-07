@@ -2041,6 +2041,9 @@ kmip_bio_encrypt_with_context(
             *tag = ctx->calloc_func(ctx->state, 1, *tag_size);
             if (*tag == NULL)
             {
+                /* Free already-allocated iv and ciphertext before returning. */
+                if (iv != NULL && *iv != NULL) { ctx->free_func(ctx->state, *iv); *iv = NULL; }
+                if (*ciphertext != NULL) { ctx->free_func(ctx->state, *ciphertext); *ciphertext = NULL; }
                 kmip_push_error_frame(ctx, __func__, __LINE__);
                 ctx->free_func(ctx->state, response_buffer);
                 kmip_free_response_message(ctx, &response_message);
@@ -2116,12 +2119,18 @@ int kmip_bio_revoke_with_context(KMIP *ctx, BIO *bio, char *key_uuid, int key_uu
     kmip_set_buffer(ctx, (uint8*)response_buffer, response_size);
     ResponseMessage resp_m = {0};
     int decode_result = kmip_decode_response_message(ctx, &resp_m);
-    
-    int final_status = KMIP_STATUS_OPERATION_FAILED;
-    if(decode_result == KMIP_OK && resp_m.batch_items != NULL) {
-        final_status = resp_m.batch_items[0].result_status;
-        kmip_set_last_result(&resp_m.batch_items[0]);
+    if(decode_result != KMIP_OK) {
+        kmip_free_buffer(ctx, (uint8*)response_buffer, response_size);
+        return decode_result;
     }
+    if(resp_m.batch_items == NULL || resp_m.batch_count < 1) {
+        kmip_free_response_message(ctx, &resp_m);
+        kmip_free_buffer(ctx, (uint8*)response_buffer, response_size);
+        return KMIP_MALFORMED_RESPONSE;
+    }
+
+    int final_status = resp_m.batch_items[0].result_status;
+    kmip_set_last_result(&resp_m.batch_items[0]);
 
     kmip_free_response_message(ctx, &resp_m);
     kmip_free_buffer(ctx, (uint8*)response_buffer, response_size);
