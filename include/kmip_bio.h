@@ -198,4 +198,7 @@ int kmip_bio_decrypt(
     int *plaintext_size
 );
 
+int kmip_bio_locate(BIO *, Attribute *, size_t, size_t *, char ***);
+int kmip_bio_locate_with_context(KMIP *, BIO *, Attribute *, size_t, size_t *, char ***);
+
 #endif  /* KMIP_BIO_H */
