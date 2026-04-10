@@ -890,6 +890,7 @@ kmip_check_enum_value(enum kmip_version version, enum tag t, int value)
             /* KMIP 1.0 */
             case KMIP_OP_CREATE:
             case KMIP_OP_GET:
+            case KMIP_OP_LOCATE:
             case KMIP_OP_DESTROY:
             case KMIP_OP_QUERY:
             case KMIP_OP_ACTIVATE:
@@ -2680,6 +2681,10 @@ kmip_free_request_batch_item(KMIP *ctx, RequestBatchItem *value)
                 kmip_free_get_attribute_list_request_payload(ctx, (GetAttributeListRequestPayload *)value->request_payload);
                 break;
 
+                case KMIP_OP_LOCATE:
+                /* LocateRequestPayload attributes are caller-owned; just free the struct. */
+                break;
+
                 default:
                 /* NOTE (ph) Hitting this case means that we don't know    */
                 /*      what the actual type, size, or value of            */
@@ -2767,6 +2772,21 @@ kmip_free_response_batch_item(KMIP *ctx, ResponseBatchItem *value)
 
                 case KMIP_OP_GET_ATTRIBUTE_LIST:
                 kmip_free_get_attribute_list_response_payload(ctx, (GetAttributeListResponsePayload *)value->response_payload);
+                break;
+
+                case KMIP_OP_LOCATE:
+                {
+                    LocateResponsePayload *lrp = (LocateResponsePayload *)value->response_payload;
+                    if(lrp->unique_identifiers != NULL)
+                    {
+                        for(int j = 0; j < lrp->unique_identifiers_count; j++)
+                        {
+                            kmip_free_text_string(ctx, &lrp->unique_identifiers[j]);
+                        }
+                        ctx->free_func(ctx->state, lrp->unique_identifiers);
+                        lrp->unique_identifiers = NULL;
+                    }
+                }
                 break;
 
                 default:
@@ -9060,21 +9080,43 @@ kmip_encode_request_batch_item(KMIP *ctx, const RequestBatchItem *value)
         result = kmip_encode_revoke_request_payload(ctx, (RevokeRequestPayload*)value->request_payload);
         break;
 
+        case KMIP_OP_LOCATE:
+        {
+            const LocateRequestPayload *lrp = (const LocateRequestPayload*)value->request_payload;
+            int payload_result = 0;
+            payload_result = kmip_encode_int32_be(ctx, TAG_TYPE(KMIP_TAG_REQUEST_PAYLOAD, KMIP_TYPE_STRUCTURE));
+            CHECK_RESULT(ctx, payload_result);
+            uint8 *pl_index = ctx->index;
+            uint8 *pv_index = ctx->index += 4;
+            for(int j = 0; j < lrp->attribute_count; j++)
+            {
+                payload_result = kmip_encode_attribute(ctx, &lrp->attributes[j]);
+                CHECK_RESULT(ctx, payload_result);
+            }
+            uint8 *pc_index = ctx->index;
+            ctx->index = pl_index;
+            payload_result = kmip_encode_length(ctx, pc_index - pv_index);
+            CHECK_RESULT(ctx, payload_result);
+            ctx->index = pc_index;
+            result = KMIP_OK;
+        }
+        break;
+
         default:
         kmip_push_error_frame(ctx, __func__, __LINE__);
         return(KMIP_NOT_IMPLEMENTED);
         break;
     };
     CHECK_RESULT(ctx, result);
-    
+
     uint8 *curr_index = ctx->index;
     ctx->index = length_index;
-    
+
     result = kmip_encode_length(ctx, curr_index - value_index);
     CHECK_RESULT(ctx, result);
 
     ctx->index = curr_index;
-    
+
     return(KMIP_OK);
 }
 
@@ -11847,6 +11889,53 @@ kmip_decode_response_batch_item(KMIP *ctx, ResponseBatchItem *value)
             value->response_payload = ctx->calloc_func(ctx->state, 1, sizeof(GetAttributeListResponsePayload));
             CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(GetAttributeListResponsePayload), "GetAttributeListResponsePayload structure");
             result = kmip_decode_get_attribute_list_response_payload(ctx, value->response_payload);
+            break;
+
+            case KMIP_OP_LOCATE:
+            {
+                value->response_payload = ctx->calloc_func(ctx->state, 1, sizeof(LocateResponsePayload));
+                CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(LocateResponsePayload), "LocateResponsePayload structure");
+                LocateResponsePayload *lrp = (LocateResponsePayload *)value->response_payload;
+
+                /* Decode the RequestPayload structure envelope. */
+                int32 tag_type = 0;
+                result = kmip_decode_int32_be(ctx, &tag_type);
+                CHECK_RESULT(ctx, result);
+                int32 payload_length = 0;
+                result = kmip_decode_int32_be(ctx, &payload_length);
+                CHECK_RESULT(ctx, result);
+
+                uint8 *payload_end = ctx->index + payload_length;
+
+                /* Count UniqueIdentifier items by scanning tags ahead. */
+                int count = 0;
+                uint8 *saved = ctx->index;
+                while(ctx->index < payload_end && kmip_is_tag_next(ctx, KMIP_TAG_UNIQUE_IDENTIFIER))
+                {
+                    /* Skip this item: tag+type(4) + length(4) + padded value */
+                    ctx->index += 4; /* tag+type */
+                    int32 item_len = 0;
+                    kmip_decode_int32_be(ctx, &item_len);
+                    int32 padded = item_len + ((8 - (item_len % 8)) % 8);
+                    ctx->index += padded;
+                    count++;
+                }
+                ctx->index = saved;
+
+                lrp->unique_identifiers_count = count;
+                lrp->located_items = count;
+                if(count > 0)
+                {
+                    lrp->unique_identifiers = ctx->calloc_func(ctx->state, count, sizeof(TextString));
+                    CHECK_NEW_MEMORY(ctx, lrp->unique_identifiers, count * sizeof(TextString), "LocateResponsePayload unique_identifiers");
+                    for(int j = 0; j < count; j++)
+                    {
+                        result = kmip_decode_text_string(ctx, KMIP_TAG_UNIQUE_IDENTIFIER, &lrp->unique_identifiers[j]);
+                        CHECK_RESULT(ctx, result);
+                    }
+                }
+                result = KMIP_OK;
+            }
             break;
 
             default:

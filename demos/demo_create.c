@@ -27,6 +27,7 @@ print_help(const char *app)
     printf("-h      : print this help info\n");
     printf("-k path : path to client key file\n");
     printf("-p port : the port number of the KMIP server\n");
+    printf("-n name : the name to assign to the created key\n");
     printf("-r path : path to CA certificate file\n");
 }
 
@@ -34,6 +35,7 @@ int
 parse_arguments(int argc, char **argv,
                 char **server_address, char **server_port,
                 char **client_certificate, char **client_key, char **ca_certificate,
+                char **name,
                 int *print_usage)
 {
     if(argc <= 1)
@@ -41,7 +43,7 @@ parse_arguments(int argc, char **argv,
         print_help(argv[0]);
         return(-1);
     }
-    
+
     for(int i = 1; i < argc; i++)
     {
         if(strncmp(argv[i], "-a", 2) == 0)
@@ -52,6 +54,8 @@ parse_arguments(int argc, char **argv,
             *print_usage = 1;
         else if(strncmp(argv[i], "-k", 2) == 0)
             *client_key = argv[++i];
+        else if(strncmp(argv[i], "-n", 2) == 0)
+            *name = argv[++i];
         else if(strncmp(argv[i], "-p", 2) == 0)
             *server_port = argv[++i];
         else if(strncmp(argv[i], "-r", 2) == 0)
@@ -72,7 +76,8 @@ use_low_level_api(const char *server_address,
                   const char *server_port,
                   const char *client_certificate,
                   const char *client_key,
-                  const char *ca_certificate)
+                  const char *ca_certificate,
+                  const char *name)
 {
     /* Set up the TLS connection to the KMIP server. */
     SSL_CTX *ctx = NULL;
@@ -152,25 +157,40 @@ use_low_level_api(const char *server_address,
     kmip_set_buffer(&kmip_context, encoding, buffer_total_size);
     
     /* Build the request message. */
-    Attribute a[3] = {0};
-    for(int i = 0; i < 3; i++)
+    Attribute a[4] = {0};
+    for(int i = 0; i < 4; i++)
         kmip_init_attribute(&a[i]);
-    
+
     enum cryptographic_algorithm algorithm = KMIP_CRYPTOALG_AES;
     a[0].type = KMIP_ATTR_CRYPTOGRAPHIC_ALGORITHM;
     a[0].value = &algorithm;
-    
+
     int32 length = 256;
     a[1].type = KMIP_ATTR_CRYPTOGRAPHIC_LENGTH;
     a[1].value = &length;
-    
+
     int32 mask = KMIP_CRYPTOMASK_ENCRYPT | KMIP_CRYPTOMASK_DECRYPT;
     a[2].type = KMIP_ATTR_CRYPTOGRAPHIC_USAGE_MASK;
     a[2].value = &mask;
-    
+
+    int attr_count = 3;
+
+    TextString name_value = {0};
+    Name name_struct = {0};
+    if(name != NULL)
+    {
+        name_value.value = name;
+        name_value.size = strlen(name);
+        name_struct.value = &name_value;
+        name_struct.type = KMIP_NAME_UNINTERPRETED_TEXT_STRING;
+        a[3].type = KMIP_ATTR_NAME;
+        a[3].value = &name_struct;
+        attr_count = 4;
+    }
+
     TemplateAttribute ta = {0};
     ta.attributes = a;
-    ta.attribute_count = ARRAY_LENGTH(a);
+    ta.attribute_count = attr_count;
     
     ProtocolVersion pv = {0};
     kmip_init_protocol_version(&pv, kmip_context.version);
@@ -356,9 +376,10 @@ main(int argc, char **argv)
     char *client_certificate = NULL;
     char *client_key = NULL;
     char *ca_certificate = NULL;
+    char *name = NULL;
     int help = 0;
-    
-    int error = parse_arguments(argc, argv, &server_address, &server_port, &client_certificate, &client_key, &ca_certificate, &help);
+
+    int error = parse_arguments(argc, argv, &server_address, &server_port, &client_certificate, &client_key, &ca_certificate, &name, &help);
     if(error)
         return(error);
     if(help)
@@ -367,6 +388,6 @@ main(int argc, char **argv)
         return(0);
     }
     
-    use_low_level_api(server_address, server_port, client_certificate, client_key, ca_certificate);
+    use_low_level_api(server_address, server_port, client_certificate, client_key, ca_certificate, name);
     return(0);
 }
