@@ -894,6 +894,7 @@ kmip_check_enum_value(enum kmip_version version, enum tag t, int value)
             case KMIP_OP_DESTROY:
             case KMIP_OP_QUERY:
             case KMIP_OP_ACTIVATE:
+            case KMIP_OP_REVOKE:
             return(KMIP_OK);
             break;
 
@@ -2763,6 +2764,7 @@ kmip_free_response_batch_item(KMIP *ctx, ResponseBatchItem *value)
                 break;
 
                 case KMIP_OP_ACTIVATE:
+                case KMIP_OP_REVOKE:
                 kmip_free_activate_response_payload(ctx, (ActivateResponsePayload *)value->response_payload);
                 break;
 
@@ -11874,6 +11876,7 @@ kmip_decode_response_batch_item(KMIP *ctx, ResponseBatchItem *value)
             break;
 
             case KMIP_OP_ACTIVATE:
+            case KMIP_OP_REVOKE:
             value->response_payload = ctx->calloc_func(ctx->state, 1, sizeof(ActivateResponsePayload));
             CHECK_NEW_MEMORY(ctx, value->response_payload, sizeof(ActivateResponsePayload), "ActivateResponsePayload structure");
             result = kmip_decode_activate_response_payload(ctx, value->response_payload);
